@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>YT Downloader</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      .container {
+        max-width: 700px;
+        margin: auto;
+      }
+      .formats-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 20px;
+      }
+      .formats-table th,
+      .formats-table td {
+        border: 1px solid #ccc;
+        padding: 8px;
+      }
+      .formats-table th {
+        background-color: #eee;
+      }
+
+      /* Colores para resaltar */
+      .audio-only {
+        background-color: #fef6f6; /* rosado muy claro */
+      }
+      .audio-recommended {
+        background-color: #ffe4e1; /* rosado más fuerte */
+      }
+      .video-only {
+        background-color: #dff3d7; /* verde muy claro */
+      }
+      .video-recommended {
+        background-color: #d0f0c0; /* verde claro */
+      }
+
+      /* Estilos para mensajes */
+      .alert {
+        padding: 8px;
+        margin-bottom: 15px;
+        border-radius: 5px;
+      }
+      .alert.error {
+        background-color: #f2dede;
+        color: #a94442;
+      }
+
+      /* Barra de progreso */
+      #progress-bar-container {
+        width: 100%;
+        background-color: #f3f3f3;
+        border: 1px solid #ccc;
+        margin: 10px 0;
+        display: none; /* oculto por defecto */
+      }
+      #progress-bar {
+        width: 0%;
+        height: 20px;
+        background-color: #4caf50;
+        text-align: center;
+        color: white;
+        line-height: 20px;
+      }
+      #status-text {
+        margin: 5px 0;
+        font-weight: bold;
+      }
+      #download-link {
+        margin-top: 10px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>YT Downloader</h1>
+
+      <!-- Mensajes flash (errores, info) -->
+      {% with messages = get_flashed_messages(with_categories=true) %} {% if
+      messages %} {% for category, message in messages %}
+      <div class="alert {{ category }}">{{ message }}</div>
+      {% endfor %} {% endif %} {% endwith %}
+
+      <!-- Formulario para ingresar URL de YouTube (busca formatos) -->
+      <form method="POST" action="{{ url_for('index') }}">
+        <label for="video_url">URL del video:</label><br />
+        <input
+          type="text"
+          name="video_url"
+          id="video_url"
+          size="60"
+          placeholder="https://www.youtube.com/watch?v=..."
+        />
+        <button type="submit">Buscar Formatos</button>
+      </form>
+
+      {% if formatos %}
+      <h2>Formatos Disponibles</h2>
+      <p>
+        <strong>Audio Recomendado:</strong> format_id == 140 (M4A)<br />
+        <strong>Video Recomendado:</strong> format_id == 137 (1080p)
+      </p>
+      <p><strong>Video:</strong> {{ video_title }}</p>
+      <p>
+        Escribe el <strong>ID</strong> o combinación (<em>137+140</em>) y
+        presiona "Iniciar descarga".
+      </p>
+
+      <table class="formats-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Ext</th>
+            <th>Resolución</th>
+            <th>Audio Codec</th>
+            <th>Video Codec</th>
+            <th>Nota</th>
+            <th>Tamaño (aprox)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for f in formatos %} {% set vcodec = f.vcodec|lower %} {% set
+          acodec = f.acodec|lower %} {% set format_id = f.format_id %} {% set
+          resolution = f.resolution|lower %} {% set format_note =
+          f.format_note|lower %} {# Determinar si es solo audio o solo video #}
+          {% set is_audio_only = (vcodec == 'none' or 'none' in vcodec) %} {%
+          set is_video_only = (acodec == 'none' or 'none' in acodec) %} {#
+          Recomendados #} {% set recommended_audio = (format_id == '140') %} {%
+          set recommended_video = (format_id == '137') %} {# Definimos la clase
+          CSS según la lógica #} {% if is_audio_only and recommended_audio %}
+          <tr class="audio-recommended">
+            {% elif is_audio_only %}
+          </tr>
+
+          <tr class="audio-only">
+            {% elif recommended_video %}
+          </tr>
+
+          <tr class="video-recommended">
+            {% else %}
+          </tr>
+
+          <tr class="video-only">
+            {% endif %}
+            <td>{{ f.format_id }}</td>
+            <td>{{ f.ext }}</td>
+            <td>{{ f.resolution }}</td>
+            <td>{{ f.acodec }}</td>
+            <td>{{ f.vcodec }}</td>
+            <td>{{ f.format_note }}</td>
+            <td>
+              {% if f.filesize > 0 %} {{ (f.filesize / 1024 / 1024)|round(2) }}
+              MB {% else %} --- {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <!-- Sección para iniciar la descarga con JavaScript (polling) -->
+      <div style="margin-top: 20px">
+        <label for="format_id">Formato / Combinación (ej: 137+140):</label
+        ><br />
+        <input
+          type="text"
+          id="format_id"
+          placeholder="137+140"
+          style="width: 150px"
+        />
+        <button id="start-download-btn">Iniciar descarga</button>
+      </div>
+
+      <!-- Barra de progreso -->
+      <div id="progress-bar-container">
+        <div id="progress-bar">0%</div>
+      </div>
+      <div id="status-text"></div>
+      <a id="download-link" href="#" target="_blank">Descargar archivo</a>
+
+      {% endif %}
+    </div>
+
+    <script>
+      const startBtn = document.getElementById("start-download-btn");
+      const progressBarContainer = document.getElementById(
+        "progress-bar-container"
+      );
+      const progressBar = document.getElementById("progress-bar");
+      const statusText = document.getElementById("status-text");
+      const downloadLink = document.getElementById("download-link");
+
+      // Función que hace polling al servidor para ver el progreso
+      function pollProgress(jobId) {
+        fetch(`/progress/${jobId}`)
+          .then((response) => response.json())
+          .then((data) => {
+            if (data.error) {
+              // Error en el job
+              statusText.textContent = "Error: " + data.error;
+              progressBarContainer.style.display = "none";
+              return;
+            }
+
+            // Actualizar barra de progreso
+            progressBarContainer.style.display = "block";
+            progressBar.style.width = data.progress + "%";
+            progressBar.textContent = data.progress + "%";
+
+            // Status textual
+            statusText.textContent = "Estado: " + data.status;
+
+            // Si terminó, mostrar link de descarga
+            if (data.status === "finished" && data.filename) {
+              downloadLink.style.display = "inline-block";
+              downloadLink.href = `/downloads/${data.filename}`;
+              statusText.textContent = "¡Descarga completa!";
+            } else if (data.status === "error") {
+              // Mostrar error
+              statusText.textContent = "Error: " + data.error;
+            } else {
+              // Si sigue descargando, reintenta en 2s
+              setTimeout(() => pollProgress(jobId), 2000);
+            }
+          })
+          .catch((err) => {
+            console.error("Error en pollProgress:", err);
+            statusText.textContent = "Error obteniendo progreso.";
+          });
+      }
+
+      // Al hacer clic en "Iniciar descarga"
+      if (startBtn) {
+        startBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          const formatId = document.getElementById("format_id").value;
+          const videoUrl = "{{ video_url }}";
+
+          if (!videoUrl || !formatId) {
+            alert("Faltan datos: URL de YouTube o Format ID.");
+            return;
+          }
+
+          // Ocultar link de descarga, resetear barra
+          downloadLink.style.display = "none";
+          progressBar.style.width = "0%";
+          progressBar.textContent = "0%";
+          statusText.textContent = "Iniciando...";
+
+          // Llamamos a /start_download (en JSON) para crear el job en el servidor
+          fetch("/start_download", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ video_url: videoUrl, format_id: formatId }),
+          })
+            .then((response) => response.json())
+            .then((data) => {
+              if (data.job_id) {
+                // Iniciamos el polling
+                pollProgress(data.job_id);
+              } else {
+                statusText.textContent = "Error al iniciar la descarga.";
+              }
+            })
+            .catch((err) => {
+              console.error("Error en start_download:", err);
+              statusText.textContent = "Error iniciando la descarga.";
+            });
+        });
+      }
+    </script>
+  </body>
+</html>
